@@ -20,9 +20,9 @@ EOF
     cat > /etc/yum.repos.d/rudder.repo << EOF
 [Rudder_${RUDDER_VERSION}]
 name=Rudder ${RUDDER_VERSION} Repository
-baseurl=http://www.rudder-project.org/rpm-${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/
+baseurl=https://ci.normation.com/rpm-packages/release/${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/
 gpgcheck=1
-gpgkey=http://www.rudder-project.org/rpm-${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/repodata/repomd.xml.key
+gpgkey=https://ci.normation.com/rpm-packages/release/${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/repodata/repomd.xml.key
 EOF
     rpm --import "http://keyserver.ubuntu.com/pks/lookup?op=get&fingerprint=on&search=0xADAB3BD36F07D355"
     return 0

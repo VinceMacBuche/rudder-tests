@@ -1,16 +1,16 @@
 #!/bin/sh
 
-PORT=8181
-PF=sles
+PORT=8281
+PF=centos
 # available: progress, documentation, html, json
 FORMAT=documentation
 
-RSPEC_BIN="/usr/bin/ruby2.1 -S rspec"
+RSPEC_BIN="ruby -S rspec"
 RSPEC_OPTS="--order defined --fail-fast --format ${FORMAT}"
 RSPEC="${RSPEC_BIN} ${RSPEC_OPTS}"
 
-export PATH=$PATH:/home/bpeccatte/Rudder/rudder-api-client/cli
-export PYTHONPATH=/home/bpeccatte/Rudder/rudder-api-client/lib.python
+export PATH=$PATH:/home/vincent/workspace/rudder-project/rudder-api-client/cli
+export PYTHONPATH=$PYTHONPATH:/home/vincent/workspace/rudder-project/rudder-api-client/lib.python
 export RUDDER_SERVER=https://localhost:${PORT}/rudder
 export RUDDER_TOKEN=$(vagrant ssh ${PF}_server -c "sudo cat /root/rudder-token" 2>/dev/null | tr -d '\r')
 

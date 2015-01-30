@@ -1,0 +1,289 @@
+#!/bin/sh
+
+set -e
+
+# Documentation !
+usage() {
+  echo "Usage $0 [add_repository|setup_agent|setup_server] <rudder_version>"
+  echo "  Adds a repository and setup rudder on your OS" 
+  echo "  Should work on as many OS as possible"
+  echo "  Currently suported : Debian, Ubuntu, RHEL, Fedora, Centos, Amazon, Oracle, SLES"
+  exit 1
+}
+# GOTO bottom for main()
+
+# use local or typeset to define a local variable
+setlocal() {
+  local="local"
+  $local x=1 2>/dev/null || local="typeset"
+}
+setlocal
+
+# Reimplement which (taken from 10_ncf_internals/list-compatible-inputs)
+which() {
+  local name="$1"
+  local IFS_SAVE="$IFS"
+  IFS=:
+  for directory in $PATH
+  do
+    if [ -x "${directory}/${name}" ]
+    then
+      echo "${directory}/${name}"
+      IFS="$IFS_SAVE"
+      return 0
+    fi
+  done
+  IFS="$IFS_SAVE"
+  return 1
+}
+
+
+MATRIX=`cat <<'EOF'
+agent;2.11;debian;[5,7]
+agent;2.11;windows;[2000,2008]
+agent;2.11;rhel;3
+agent;2.11;rhel;[5,6]
+agent;2.11;suse;10_SP3
+agent;2.11;suse;11
+agent;2.11;ubuntu;10.04
+agent;2.11;ubuntu;12.04
+agent;2.11;ubuntu;12.10
+server;2.11;debian;[6,7]
+server;2.11;rhel;6
+server;2.11;suse;11_SP1
+server;2.11;ubuntu;[12.04-12.10]
+
+EOF
+`
+
+release_file() {
+  $local rf_distro="$1"
+  $local rf_release_file="$2"
+  $local rf_regex="$3"
+  if [ ! -f "${rf_release_file}" ]; then return 1; fi
+  OS_NAME="${rf_distro}"
+  OS_VERSION=`sed -n "/${rf_regex}/s/${rf_regex}/\\1/p" ${rf_release_file}`
+}
+
+# output example
+#
+#OS_NAME=Centos
+#OS_COMPATIBLE=RHEL
+#OS_VERSION=7.2014_sp3
+#OS_COMPATIBLE_VERSION=7.0
+#
+#PM=apt
+#PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get -y install"
+
+detect_os() {
+  # defauls values
+  OS_NAME="unknown"
+  OS_COMPATIBLE=""
+  OS_VERSION=""
+  OS_COMPATIBLE_VERSION=""
+  PM=""
+  PM_INSTALL="echo 'Your package manager is not yet supported; false"
+  
+  # detect package manager
+  ########################
+  # TODO macports, homebrew, portage
+  if hash apt-get 2> /dev/null
+  then
+    PM="apt"
+    export DEBIAN_FRONTEND=noninteractive
+    PM_INSTALL="apt-get -y install"
+  elif hash yum 2> /dev/null
+  then
+    PM="yum"
+    PM_INSTALL="yum -y install"
+  elif hash zypper 2> /dev/null
+  then
+    PM="zypper"
+    PM_INSTALL="zypper --non-interactive install"
+  fi
+
+
+  # detect os and version
+  #######################
+  
+  if [ "$(uname -s)" = "AIX" ]; then
+    OS_NAME="AIX"
+    # Format: Major.Minor (Ex: 5.3)
+    OS_VERSION="$(uname -v).$(uname -r)"
+  elif [ "$(uname -s)" = "SunOS" ] ; then
+    OS_NAME="Solaris"
+    OS_VERSION="$(uname -v).$(uname -r)"
+
+  # try with lsb_release
+  elif hash lsb_release 2> /dev/null; then
+    OS_NAME=`lsb_release -is`
+    OS_VERSION=`lsb_release -rs`
+
+  # manual detection adapted from FusionInventory lib/FusionInventory/Agent/Task/Inventory/Linux/Distro/NonLSB.pm 
+  elif release_file  'VMWare' '/etc/vmware-release' '.*\([0-9.]\+\).*'; then true
+  elif release_file  'ArchLinux' '/etc/arch-release' '\(.*\)'; then true
+  elif release_file  'Debian' '/etc/debian_version' '\(.*\)'; then 
+    if [  "${OS_VERSION}" = "jessie/sid" ]; then OS_VERSION=7; fi
+  elif release_file  'Fedora' '/etc/fedora-release' '.*release \([0-9.]\+\)'; then true
+  elif release_file  'Gentoo' '/etc/gentoo-release' '\(.*\)'; then true
+  elif release_file  'Knoppix' '/etc/knoppix_version' '\(.*\)'; then true
+  elif release_file  'Mandriva' '/etc/mandriva-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'Mandrake' '/etc/mandrake-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'Oracle' '/etc/oracle-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'CentOS' '/etc/centos-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'RedHat' '/etc/redhat-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'Slackware' '/etc/slackware-version' '.*Slackware \(.*\).*'; then true
+  elif release_file  'Trustix' '/etc/trustix-release' '.*release \([0-9.]\+\).*'; then true
+  elif release_file  'SuSE' '/etc/SuSE-release' 'VERSION *= *\([0-9.]\+\).*'; then 
+    OS_VERSION="${OS_VERSION}-`sed -n '/PATCHLEVEL/s/PATCHLEVEL *= *\([0-9.]\+\).*/\1/p' /etc/SuSE-release`"
+  elif release_file  'Amazon' '/etc/system-release-cpe' '[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\([^:]*\):.*'; then true
+  fi
+
+  # Detect compatibility
+  ######################
+  OS_COMPATIBLE=`echo "${OS_NAME}" | tr '[:lower:]' '[:upper:]'`
+  OS_COMPATIBLE_VERSION="${OS_VERSION}"
+  case "${OS_NAME}" in
+    RedHat) OS_COMPATIBLE="RHEL" ;;
+    Oracle) OS_COMPATIBLE="RHEL" ;;
+    CentOS) OS_COMPATIBLE="RHEL" ;;
+    Amazon) OS_COMPATIBLE="RHEL" 
+            OS_COMPATIBLE_VERSION=6;;
+    SuSE)   OS_COMPATIBLE="SLES" ;;
+  esac
+  
+  export OS_NAME OS_COMPATIBLE OS_VERSION OS_COMPATIBLE_VERSION PM PM_INSTALL
+}
+
+
+############################################
+# Add rudder repository to package manager #
+############################################
+add_repo() {
+
+  if [ "${PM}" = "apt" ]
+  then
+    # Debian / Ubuntu like
+    apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 474A19E8
+    cat > /etc/apt/sources.list.d/rudder.list << EOF
+deb http://www.rudder-project.org/apt-${RUDDER_VERSION}/ `lsb_release -cs` main
+EOF
+    apt-get update
+    return 0
+  
+  elif [ "${PM}" = "yum" ]
+  then
+    # Add RHEL like rpm repo
+    $local OSVERSION=`echo "${OS_COMPATIBLE_VERSION}" | sed 's/[^0-9].*//'`
+    cat > /etc/yum.repos.d/rudder.repo << EOF
+[Rudder_${RUDDER_VERSION}]
+name=Rudder ${RUDDER_VERSION} Repository
+baseurl=https://ci.normation.com/rpm-packages/release/${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/
+gpgcheck=1
+gpgkey=https://ci.normation.com/rpm-packages/release/${RUDDER_VERSION}/${OS_COMPATIBLE}_${OSVERSION}/repodata/repomd.xml.key
+EOF
+    rpm --import "http://keyserver.ubuntu.com/pks/lookup?op=get&fingerprint=on&search=0xADAB3BD36F07D355"
+    return 0
+  
+  elif [ "${PM}" = "zypper" ]
+  then
+    $local OSVERSION=`echo "${OS_COMPATIBLE_VERSION}" | sed 's/[^0-9].*//'`
+    rpm --import "http://keyserver.ubuntu.com/pks/lookup?op=get&fingerprint=on&search=0xADAB3BD36F07D355"
+    zypper addrepo -n "Normation RPM Repositories" "http://www.rudder-project.org/rpm-${RUDDER_VERSION}/SLES_${OSVERSION}/" Rudder || true
+    zypper refresh
+    return 0
+  fi
+  
+  # TODO pkgng emerge pacman smartos
+  # There is help in Fusion Inventory lib/FusionInventory/Agent/Task/Inventory/Linux/Distro/NonLSB.pm
+  echo "Sorry your Package Manager is not *yet* supported !"
+  return 1
+}
+
+######################
+# Setup rudder agent #
+######################
+setup_agent() {
+
+  # install via package manager only
+  if [ -z "${PM}" ]
+  then
+    echo "Sorry your System is not *yet* supported !"
+    exit 4
+  fi
+
+  # install
+  ${PM_INSTALL} rudder-agent
+
+  # hacks
+  #######
+  # TODO rhel5 only
+  #${PM_INSTALL} pcre openssl db4-devel
+
+
+  # TODO rudder < 2.11 only
+  echo "rudder" > /var/rudder/cfengine-community/policy_server.dat
+
+  /etc/init.d/rudder-agent start
+}
+
+#######################
+# Setup rudder server #
+#######################
+setup_server() {
+
+  # install via package manager only
+  if [ -z "${PM}" ]
+  then
+    echo "Sorry your System is not *yet* supported !"
+    exit 4
+  fi
+
+  # TODO detect supported OS
+  # echo "Sorry your System is not supported by Rudder Server !"
+  # exit 5
+
+  $local SERVER_HOSTNAME=`hostname`
+  $local DEMOSAMPLE="no"
+  $local LDAPRESET="yes"
+  $local INITPRORESET="yes"
+  # TODO detect
+  $local ALLOWEDNETWORK='192.168.42.0/24'
+
+  # install
+  ${PM_INSTALL} rudder-server-root
+
+  # hacks
+  #######
+  # None at first
+
+  # Initialize Rudder
+  /opt/rudder/bin/rudder-init.sh ${SERVER_HOSTNAME} ${DEMOSAMPLE} ${LDAPRESET} ${INITPRORESET} ${ALLOWEDNETWORK} < /dev/null > /dev/null 2>&1
+}
+
+
+########
+# MAIN #
+########
+
+COMMAND="$1"
+RUDDER_VERSION="$2"
+
+detect_os
+
+case "${COMMAND}" in
+  add_repository)
+    add_repo
+    ;;
+  setup_agent)
+    add_repo
+    setup_agent 
+    ;;
+  setup_server)
+    add_repo
+    setup_server
+    ;;
+  *)
+    usage
+    ;;
+esac
